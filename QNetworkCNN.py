@@ -74,7 +74,6 @@ class QNetworkCNN(nn.Module):
         
         #inp = inp.view((4, 20, 10))
         x = self.enc.forward(inp)
-        print(x.size())
         x = torch.flatten(x, 1)
         x = self.fc_1(x)
         x = F.relu(x)

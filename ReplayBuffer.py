@@ -2,14 +2,14 @@ import torch as T
 import numpy as np
 
 class ReplayBuffer:
-    def __init__(self, max_size, input_shape): #device?
+    def __init__(self, max_size, input_shape, device): #device?
         self.size_ctr = 0
         self.max_size = max_size
 
-        self.states = T.zeros((max_size, *input_shape), dtype=T.uint8) #TODO: uint8
-        self.rewards = T.zeros((max_size, 4), dtype=T.int32)
-        self.actions = T.zeros((max_size, 4), dtype=T.uint8)
-        self.is_dones = T.zeros((max_size, 4), dtype=T.uint8)
+        self.states = T.zeros((max_size, *input_shape), dtype=T.uint8, device=device)
+        self.rewards = T.zeros(max_size, dtype=T.int32, device=device)
+        self.actions = T.zeros(max_size, dtype=T.uint8, device=device)
+        self.is_dones = T.zeros(max_size, dtype=T.uint8, device=device)
 
 
     def store(self, state, action, reward, done):
@@ -25,14 +25,21 @@ class ReplayBuffer:
 
     def sample(self, batch_size):
 
-        max_idx = min(self.max_size, self.size_ctr) - 1
+        max_idx = min(self.max_size, self.size_ctr) - 5
         idcs = np.random.choice(max_idx, batch_size, replace=False)
 
-        states = self.state[idcs]
-        next_states = self.states[idcs+1]
+        states, next_states = [], []
+
+        for i in range(4):
+            states.append(self.states[idcs+i])
+            next_states.append(self.states[idcs+i+1])
+        
+        states = T.stack(states, dim=1)
+        next_states = T.stack(next_states, dim=1)
+
         actions = self.actions[idcs]
         rewards = self.rewards[idcs]
-        is_dones = self.is_done[idcs]
+        is_dones = self.is_dones[idcs]
 
         return states, next_states, actions, rewards, is_dones
     
