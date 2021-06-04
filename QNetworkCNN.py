@@ -60,7 +60,7 @@ class QNetworkCNN(nn.Module):
         n_res_block=2,
         n_res_channel=64,
         stride=4,
-        action_dim=5
+        action_dim=6
         ):
       
         super(QNetworkCNN, self).__init__()

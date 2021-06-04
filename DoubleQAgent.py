@@ -8,7 +8,7 @@ from gym_tetris.actions import SIMPLE_MOVEMENT
 
 class Agent:
     def __init__(self, batch_size=32, frame_shape=(20,10), max_buffer_size=1000000, epsilon=1, gamma=0.99, lr=0.00025, epsilon_decay=9e-7
-                 , min_epsilon=0.1, n_actions=5, training=True):
+                 , min_epsilon=0.1, n_actions=6, training=True):
         
         self.frame_shape = frame_shape
         self.epsilon = epsilon
@@ -40,6 +40,8 @@ class Agent:
             for parameter in self.predict_QNetwork.parameters():
                 parameter.requires_grad = False
 
+        self.log = T.zeros((50000000//4, 2), device = self.device)
+        
             
     def decay_epsilon(self):
         self.epsilon = max(self.epsilon - self.epsilon_decay, self.min_epsilon)
@@ -55,7 +57,7 @@ class Agent:
       else:
         return np.random.randint(self.n_actions)
         
-    def train(self, epochs):
+    def train(self, epochs, idx):
 
       for _ in range(epochs):
 
@@ -70,6 +72,9 @@ class Agent:
 
         next_q_value = next_Q_state_values.gather(1, T.max(next_Q_values, 1)[1].unsqueeze(1)).squeeze(1)
         expected_q_value = rewards + self.gamma * next_q_value * (1 - is_done)
+        
+        self.log[idx][0] = Q_value.mean()
+        self.log[idx][1] = expected_q_value.mean()
 
         loss = self.criterion(Q_value, expected_q_value.detach()) #no gradients needed for expected values
         self.optimizer.zero_grad()
@@ -81,54 +86,61 @@ class Agent:
         self.preFillReplayBuffer()
         print('preFill done !')
 
-        env = gym_tetris.make('TetrisA-v0')
+        env = gym_tetris.make('TetrisA-v2')
         env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
         total_ctr = 0
-        while total_ctr < 50000000 :
+        while total_ctr//24 < 50000000 :
             start = self.preProcessFrame(env.reset())
             tmp_state = [start, start, start, start]
 
             done = False
-            step_ctr = 1
+            step_ctr = 0 
             #self.predict_QNetwork.eval()
-            total_reward = 0 
+            total_reward = 0
 
             while not done:
                 
-                action = self.chooseAction(tmp_state)
-                state, reward, done, _ = env.step(action)
+                if step_ctr % 24 == 0:
+                    action = self.chooseAction(tmp_state)
+                    state, reward, done, _ = env.step(action)
+                    state = self.preProcessFrame(state)
+                    self.replay_buffer.store(state, action, reward, done)
+                    self.decay_epsilon()
 
-                #env.render()
-                state = self.preProcessFrame(state)
-                self.replay_buffer.store(state, action, reward, done)
-                
-                if step_ctr % 4 == 0:
-                    #self.predict_QNetwork.train()
-                    self.train(1)
-                    #self.predict_QNetwork.eval()
-                    
-                    if step_ctr % 10000 == 0:
-                        state_dict = self.predict_QNetwork.state_dict()
-                        self.target_QNetwork.load_state_dict(state_dict)
-                        T.save(state_dict, f'weights_{total_ctr}.pt')
-                        print('Saved weights')
+                    tmp_state.pop(0)
+                    tmp_state.append(state)
+
+                    if step_ctr % 96 == 0:
+                        #self.predict_QNetwork.train()
+                        self.train(1, min(50000000//4, total_ctr//96))
+                        #self.predict_QNetwork.eval()
+
+                else:
+                    state, reward, done, _ = env.step(action)
+                    if done:
+                        self.replay_buffer.store(self.preProcessFrame(state), action, reward, done)
+
+                if total_ctr % 240000 == 0:
+                    state_dict = self.predict_QNetwork.state_dict()
+                    self.target_QNetwork.load_state_dict(state_dict)
+
+                    T.save(state_dict, f'weights/weights_{total_ctr}.pt')
+                    T.save(self.log, 'Qlogs')
+                    print('Saved weights and Qlogs')
                         
                 total_reward += reward
-                self.decay_epsilon()
+                
                 step_ctr += 1
-
-                tmp_state.pop(0)
-                tmp_state.append(state)
-
-            total_ctr  += step_ctr-1
+                total_ctr  += 1
+            
             print(f'Played {step_ctr} frames game with score {total_reward}, total frames {total_ctr}')
 
         env.close()
         
     def preProcessFrame(self, frame):
         frame = np.copy(frame[47:209, 95:176, :])
-        frame = (frame[..., :3] @ [0.299, 0.587, 0.114]).astype(np.uint8)
+        frame = (frame[..., :3] @ [0.299, 0.587, 0.114]).astype(np.bool)
         idcs_y = np.arange(4,81,8)
         idcs_x = np.arange(4,162,8)
         frame = frame[idcs_x[:, np.newaxis], idcs_y]
@@ -136,25 +148,42 @@ class Agent:
         return T.from_numpy(frame)
 
 
-    def preFillReplayBuffer(self, n_steps=50000):
+    def preFillReplayBuffer(self, n_states=12500):
 
-        env = gym_tetris.make('TetrisA-v0')
+        env = gym_tetris.make('TetrisA-v2')
         env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
-        total_ctr = 0 
+        total_ctr = 0
       
-        while total_ctr < n_steps:
+        while total_ctr < n_states:
             state = env.reset()
             done = False
+            steps = 0
+
+            start = self.preProcessFrame(env.reset())
+            tmp_state = [start, start, start, start]
 
             while not done:
-                action = self.chooseAction(state)
-                state, reward, done, _ = env.step(action)
-                self.replay_buffer.store(self.preProcessFrame(state), action, reward, done)
-                total_ctr += 1
+
+                
+                if steps % 24 == 0:
+                    action = self.chooseAction(tmp_state)
+                    state, reward, done, _  = env.step(action)
+                    state = self.preProcessFrame(state)
+                    self.replay_buffer.store(state, action, reward, done)
+
+                    tmp_state.pop(0)
+                    tmp_state.append(state)
+                else:
+                    state, reward, done, _ = env.step(action)
+                    if done:
+                        self.replay_buffer.store(self.preProcessFrame(state), action, reward, done)
+
+                steps += 1
+            total_ctr += steps//24
 
         env.close()
-        
+
 
 #TODO: put replayBuffer in VRAM
 
